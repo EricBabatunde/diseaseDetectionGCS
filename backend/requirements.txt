@@ -1,7 +1,20 @@
-fastapi==0.110.1
-uvicorn==0.29.0
-opencv-python==4.9.0.80
-numpy==1.26.4
-python-multipart==0.0.9
-requests==2.31.0
-pillow==10.3.0
+# ============================================================================
+#  Aerosense Backend — Python Dependencies
+# ============================================================================
+#  Install with:  pip install -r requirements.txt
+# ============================================================================
+
+# --- Web Framework ---
+fastapi==0.115.12
+uvicorn==0.34.3
+python-multipart==0.0.20        # Required for FastAPI UploadFile support
+
+# --- PyTorch & Vision ---
+torch==2.7.1
+torchvision==0.22.1
+
+# --- Image Processing ---
+pillow==11.2.1
+
+# --- Utilities ---
+numpy==2.3.0

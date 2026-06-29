@@ -1,0 +1,18 @@
+# Python Environments
+
+# --- Backend (Python) ---
+backend/venv/
+backend/env/
+backend/__pycache__/
+backend/**/*.pyc
+
+# PlatformIO / C++ Build Files
+.pio/
+.vscode/
+
+# Ignore large AI model weights (optional, uncomment if your .pth is too large for GitHub)
+# *.pth
+
+# --- Firmware (C++ / PlatformIO) ---
+firmware/.pio/
+firmware/.vscode/
