@@ -1,1 +1,12 @@
 Place your exported AI models (e.g., .onnx, .pt, .tflite) in this directory.
+The model tests and recognizes:
+- Leaf Blight
+- Bacterial Spot
+- Early Blight
+- Late Blight
+- Target Spot
+- Leaf Mold
+- Septoria Leaf Spot
+- Spider Mites
+- Powdery Mildew
+- Healthy
