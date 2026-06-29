@@ -1,0 +1,68 @@
+/*
+ * ============================================================================
+ *   camera_pins.h — OV2640 Pin Mapping for ESP32-S3 CAM Modules
+ * ============================================================================
+ *
+ *   Isolates all hardware-specific GPIO assignments for the OV2640 camera
+ *   sensor connected to the ESP32-S3 via a flex ribbon cable. Modify these
+ *   definitions if porting to a different carrier board or custom PCB.
+ *
+ *   Reference: ESP32-S3 WROOM CAM DevKit schematic
+ * ============================================================================
+ */
+
+#ifndef CAMERA_PINS_H
+#define CAMERA_PINS_H
+
+// ============================================================================
+//  POWER & RESET (Active-low; set to -1 if not wired on your board)
+// ============================================================================
+#define CAM_PIN_PWDN      -1     // Power-down control (not used on most S3 boards)
+#define CAM_PIN_RESET     -1     // Hardware reset (not used — software reset only)
+
+// ============================================================================
+//  SCCB CONTROL BUS (I2C-like interface for OV2640 register access)
+// ============================================================================
+#define CAM_PIN_SIOD      40     // SCCB Data  (SDA)
+#define CAM_PIN_SIOC      39     // SCCB Clock (SCL)
+
+// ============================================================================
+//  CLOCK SIGNALS
+// ============================================================================
+#define CAM_PIN_XCLK      10     // Master clock output TO the sensor
+#define CAM_PIN_PCLK      13     // Pixel clock input FROM the sensor
+
+// ============================================================================
+//  SYNC SIGNALS
+// ============================================================================
+#define CAM_PIN_VSYNC     38     // Vertical sync — marks start of each frame
+#define CAM_PIN_HREF      47     // Horizontal ref — marks valid pixel data window
+
+// ============================================================================
+//  PARALLEL DATA BUS (D0–D7, directly from the OV2640 data output pins)
+// ============================================================================
+//  Signal   |  GPIO  |  OV2640 Pin  |  Bit Position
+//  ---------|--------|--------------|---------------
+#define CAM_PIN_D0       15     //  Y2  — LSB (bit 0)
+#define CAM_PIN_D1       17     //  Y3  — bit 1
+#define CAM_PIN_D2       18     //  Y4  — bit 2
+#define CAM_PIN_D3       16     //  Y5  — bit 3
+#define CAM_PIN_D4       14     //  Y6  — bit 4
+#define CAM_PIN_D5       12     //  Y7  — bit 5
+#define CAM_PIN_D6       11     //  Y8  — bit 6
+#define CAM_PIN_D7       48     //  Y9  — MSB (bit 7)
+
+// ============================================================================
+//  XCLK FREQUENCY
+// ============================================================================
+//  20 MHz = standard full-speed operation (short/rigid flex cables).
+//  16 MHz = safe fallback for medium-length flex cables.
+//  10 MHz = ultra-conservative for long or mechanically stressed cables.
+//
+//  For drone payloads with vibration, 16 MHz is recommended as a baseline.
+//  Uncomment one of the alternatives below if you experience image glitches.
+#define CAM_XCLK_FREQ_HZ   20000000    // 20 MHz — default
+// #define CAM_XCLK_FREQ_HZ 16000000   // 16 MHz — flex cable fallback
+// #define CAM_XCLK_FREQ_HZ 10000000   // 10 MHz — long cable safety mode
+
+#endif // CAMERA_PINS_H
