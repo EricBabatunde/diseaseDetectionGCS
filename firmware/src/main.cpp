@@ -97,12 +97,25 @@ static esp_err_t stream_handler(httpd_req_t* req) {
 
     // ---- Main streaming loop ----
     while (true) {
-        // Acquire a single JPEG frame from the OV2640
+        // Acquire a single JPEG frame from the OV2640.
+        // If the buffer is unavailable (PSRAM pressure, flex cable noise),
+        // retry up to 5 times with a FreeRTOS-safe delay between attempts
+        // to avoid starving the watchdog timer.
         fb = esp_camera_fb_get();
         if (!fb) {
-            Serial.println("[STREAM] WARNING: fb_get() returned NULL — retrying");
-            delay(50);  // Brief cooldown before retry
-            continue;
+            static const int MAX_FB_RETRIES = 5;
+            bool recovered = false;
+            for (int retry = 1; retry <= MAX_FB_RETRIES; retry++) {
+                Serial.printf("[STREAM] WARNING: fb_get() returned NULL — retry %d/%d\n", retry, MAX_FB_RETRIES);
+                vTaskDelay(pdMS_TO_TICKS(100));  // Yield to RTOS scheduler, prevents WDT reset
+                fb = esp_camera_fb_get();
+                if (fb) { recovered = true; break; }
+            }
+            if (!recovered) {
+                Serial.println("[STREAM] ERROR: Frame capture failed after max retries — ending stream");
+                res = ESP_FAIL;
+                break;
+            }
         }
 
         // 1. Send multipart boundary separator
@@ -139,6 +152,8 @@ static esp_err_t stream_handler(httpd_req_t* req) {
 // ============================================================================
 // Configures the OV2640 sensor using pin macros from camera_pins.h.
 // Activates PSRAM double-buffering when available for smooth streaming.
+// Returns true if camera init succeeded, false otherwise.
+// NOTE: A false return is NON-FATAL — the AP and server will remain active.
 
 static bool initCamera() {
     camera_config_t config = {};
@@ -167,38 +182,47 @@ static bool initCamera() {
     config.pin_sccb_sda = CAM_PIN_SIOD;
     config.pin_sccb_scl = CAM_PIN_SIOC;
 
-    // Power and reset (not wired on most ESP32-S3 CAM boards)
-    config.pin_pwdn  = CAM_PIN_PWDN;
-    config.pin_reset = CAM_PIN_RESET;
+    // Power and reset — explicitly disabled (-1) to avoid interfering
+    // with SCCB probe. The 0x105 error is often caused by the driver
+    // toggling a PWDN/RESET pin that isn't physically wired.
+    config.pin_pwdn  = CAM_PIN_PWDN;    // -1 from camera_pins.h
+    config.pin_reset = CAM_PIN_RESET;   // -1 from camera_pins.h
 
-    // Clock frequency and pixel format
-    config.xclk_freq_hz = CAM_XCLK_FREQ_HZ;
+    // Clock frequency — hardcoded to 10 MHz for flex cable signal stability.
+    // The default 20 MHz from camera_pins.h causes frame buffer corruption
+    // over longer or mechanically stressed ribbon cables.
+    config.xclk_freq_hz = 10000000;           // 10 MHz — flex cable safe mode
     config.pixel_format = PIXFORMAT_JPEG;
 
-    // Conservative baseline (works even without PSRAM)
-    config.frame_size   = FRAMESIZE_SVGA;     // 800×600
-    config.jpeg_quality = 12;                 // Lower number = higher quality
-    config.fb_count     = 1;
-    config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+    // Frame size and quality — VGA (640×480) ensures reliable PSRAM allocation
+    // and reduces per-frame memory footprint for double-buffering.
+    config.frame_size   = FRAMESIZE_VGA;      // 640×480
+    config.jpeg_quality = 12;                 // Safe baseline (lower = higher quality)
+
+    // Force double-buffered PSRAM operation for smooth streaming.
+    // fb_count=2: one buffer fills while the other is served to the client.
+    // GRAB_LATEST: always serve the most recent frame, discard stale ones.
+    config.fb_count     = 2;
+    config.grab_mode    = CAMERA_GRAB_LATEST;
     config.fb_location  = CAMERA_FB_IN_PSRAM;
 
-    // Upgrade to double-buffered mode if PSRAM is available
     if (psramFound()) {
-        Serial.println("[CAMERA] PSRAM detected — enabling double-buffer mode");
-        config.jpeg_quality = 10;                     // Crisper frames for AI analysis
-        config.fb_count     = 2;                      // Double buffer: fill + serve
-        config.grab_mode    = CAMERA_GRAB_LATEST;     // Always serve the freshest frame
+        Serial.println("[CAMERA] PSRAM detected — double-buffer mode active");
     } else {
-        Serial.println("[CAMERA] WARNING: No PSRAM — single buffer in DRAM");
+        Serial.println("[CAMERA] CRITICAL: No PSRAM found! Double-buffering requires PSRAM.");
+        Serial.println("[CAMERA] Falling back to single buffer in DRAM (stream may freeze).");
+        config.fb_count    = 1;
         config.fb_location = CAMERA_FB_IN_DRAM;
+        config.grab_mode   = CAMERA_GRAB_WHEN_EMPTY;
     }
 
     // Initialise the camera driver
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        Serial.printf("[CAMERA] FATAL: esp_camera_init() failed with error 0x%x\n", err);
+        Serial.printf("[CAMERA] ERROR: esp_camera_init() failed with error 0x%x\n", err);
         Serial.println("[CAMERA] Check ribbon cable seating and pin definitions.");
-        return false;
+        Serial.println("[CAMERA] Wi-Fi AP and server will remain active for diagnostics.");
+        return false;   // Non-fatal — caller must NOT halt
     }
 
     // Fine-tune sensor image parameters after initialisation
@@ -216,9 +240,8 @@ static bool initCamera() {
         Serial.println("[CAMERA] Sensor tuning applied");
     }
 
-    Serial.printf("[CAMERA] Initialised — Resolution: SVGA (800x600) | Quality: %d | Buffers: %d\n",
-                  psramFound() ? 10 : 12,
-                  psramFound() ? 2  : 1);
+    Serial.printf("[CAMERA] Initialised — Resolution: VGA (640x480) | XCLK: 10MHz | Quality: 12 | Buffers: %d\n",
+                  psramFound() ? 2 : 1);
 
     return true;
 }
@@ -284,16 +307,12 @@ void setup() {
     Serial.println("  Mode: Wi-Fi Access Point (AP)");
     Serial.println("============================================");
 
-    // ---- Step 1: Initialise Camera ----
-    if (!initCamera()) {
-        Serial.println("[SETUP] Camera initialisation failed. Halting.");
-        while (true) { delay(1000); }   // Halt — no point continuing without a camera
-    }
-
-    // ---- Step 2: Start Wi-Fi Access Point ----
+    // ---- Step 1: Start Wi-Fi Access Point FIRST ----
+    // The AP must come up before anything else so the GCS operator can
+    // always connect for diagnostics, even if the camera probe fails.
     startAccessPoint();
 
-    // ---- Step 3: Start mDNS Responder ----
+    // ---- Step 2: Start mDNS Responder ----
     // Binds "esp32-cam.local" so the GCS dashboard resolves the stream URL
     // without needing the raw 192.168.4.1 gateway address.
     if (MDNS.begin(MDNS_HOSTNAME)) {
@@ -304,8 +323,19 @@ void setup() {
         Serial.println("[MDNS] Stream will still work via raw IP: 192.168.4.1");
     }
 
-    // ---- Step 4: Start MJPEG Stream Server ----
+    // ---- Step 3: Start MJPEG Stream Server ----
+    // Server is started before camera init so the HTTP endpoint is always
+    // reachable. If camera init fails, stream requests will simply get
+    // NULL frames (handled gracefully by the stream_handler loop).
     startStreamServer();
+
+    // ---- Step 4: Initialise Camera (non-fatal on failure) ----
+    if (!initCamera()) {
+        Serial.println("[SETUP] WARNING: Camera probe failed.");
+        Serial.println("[SETUP] AP + mDNS + HTTP server are still running.");
+        Serial.println("[SETUP] Check the ribbon cable and re-flash if needed.");
+        // Execution continues — do NOT halt
+    }
 
     // ---- Boot Summary ----
     Serial.println();
