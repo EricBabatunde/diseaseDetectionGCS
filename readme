@@ -1,0 +1,13 @@
+open the folder in platformio
+
+go into the backend directory
+
+run the command: 
+python3 -m venv venv
+source venv/bin/activate
+pip install torch torchvision torchaudio fastapi uvicorn opencv-python numpy python-multipart
+
+anytime you shutdown your laptop, if you want to resume work in the backend folder, run the command:
+source venv/bin/activate
+
+
